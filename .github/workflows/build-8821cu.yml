@@ -39,7 +39,7 @@ jobs:
           for f in build_8821cu_gki.sh inputs/config.gz; do
             [ -s "$f" ] || { echo "::error::missing $f"; exit 1; }
           done
-          zcat inputs/config.gz | head -3
+          zcat inputs/config.gz | sed -n '1,3p'
           if [ ! -s inputs/cfg80211.ko ]; then
             echo "::warning::inputs/cfg80211.ko missing - the symbol CRC cross-check will be skipped"
           fi
