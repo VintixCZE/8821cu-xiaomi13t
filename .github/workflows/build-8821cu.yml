@@ -1,0 +1,116 @@
+name: Build 8821cu.ko (Xiaomi 13T, GKI 5.10.136)
+
+# Builds the RTL8821CU module against the exact GKI kernel of the phone, on a GitHub runner
+# (so your own PC does not need the RAM for the full-LTO kernel link).
+#
+# Repo layout expected:
+#   build_8821cu_gki.sh        <- the build script
+#   inputs/config.gz           <- the phone's /proc/config.gz
+#   inputs/cfg80211.ko         <- cfg80211.ko pulled from the phone's vendor_boot ramdisk
+#   .github/workflows/build-8821cu.yml   <- this file
+#
+# Run it from the Actions tab: "Build 8821cu.ko" -> "Run workflow".
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_thin_lto:
+        description: "Switch the phone's full LTO to ThinLTO (less RAM, but CRCs not proven identical)"
+        type: boolean
+        default: false
+      quick:
+        description: "QUICK mode: skip the kernel build (minutes, but NO symbol CRC safety check)"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    # GitHub-hosted jobs are capped at 6 hours
+    timeout-minutes: 355
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check input files
+        shell: bash
+        run: |
+          for f in build_8821cu_gki.sh inputs/config.gz; do
+            [ -s "$f" ] || { echo "::error::missing $f"; exit 1; }
+          done
+          zcat inputs/config.gz | head -3
+          if [ ! -s inputs/cfg80211.ko ]; then
+            echo "::warning::inputs/cfg80211.ko missing - the symbol CRC cross-check will be skipped"
+          fi
+
+      - name: Free disk space and add swap
+        shell: bash
+        run: |
+          # The kernel build needs ~25 GB; remove big preinstalled toolchains we do not use
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/.ghcup
+          # Full-LTO link needs far more RAM than the runner has: add a big swap file
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          avail_mnt=$(df --output=avail -BG /mnt | tail -1 | tr -dc '0-9')
+          if [ "${avail_mnt:-0}" -ge 10 ]; then
+            swapfile=/mnt/swapfile; size=$(( avail_mnt - 2 ))
+          else
+            swapfile=/swapfile; size=12
+          fi
+          [ "$size" -gt 20 ] && size=20
+          echo "creating ${size}G swap at $swapfile"
+          sudo fallocate -l "${size}G" "$swapfile"
+          sudo chmod 600 "$swapfile"
+          sudo mkswap "$swapfile"
+          sudo swapon "$swapfile"
+          free -h
+          df -h / /mnt
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git make gcc clang lld llvm flex bison bc perl python3 \
+            libssl-dev libelf-dev libncurses-dev cpio rsync kmod \
+            diffutils findutils patch xz-utils zstd gzip lz4
+
+      - name: Build 8821cu.ko
+        shell: bash
+        env:
+          FORCE_THIN_LTO_INPUT: ${{ inputs.force_thin_lto }}
+          QUICK_INPUT: ${{ inputs.quick }}
+        run: |
+          export PATH="$PATH:/usr/sbin:/sbin"
+          export SKIP_DNF=1                       # Fedora-only package step in the script
+          export CONFIG_GZ="$GITHUB_WORKSPACE/inputs/config.gz"
+          [ -s inputs/cfg80211.ko ] && export PHONE_KO="$GITHUB_WORKSPACE/inputs/cfg80211.ko"
+          export WORKDIR="$HOME/rtl8821cu-build"
+          export JOBS="$(nproc)"
+          [ "$FORCE_THIN_LTO_INPUT" = "true" ] && export FORCE_THIN_LTO=1
+          [ "$QUICK_INPUT" = "true" ] && export QUICK=1
+          chmod +x build_8821cu_gki.sh
+          ./build_8821cu_gki.sh 2>&1 | tee build.log
+
+      - name: Summarize checks
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## 8821cu build checks"
+            echo '```'
+            grep -E 'vermagic|CRC check|MISMATCH|WARN|kernel.release|dropping unsupported|Done:' build.log || echo "no check lines found"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload module and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 8821cu-xiaomi13t-gki-5.10.136
+          path: |
+            output/
+            build.log
+          if-no-files-found: warn
