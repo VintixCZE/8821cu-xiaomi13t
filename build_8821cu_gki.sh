@@ -148,6 +148,20 @@ if grep -q '^CONFIG_TRIM_UNUSED_KSYMS=y' "$OUT/.config"; then
   mk olddefconfig
 fi
 
+# The phone's own cfg80211.ko was built with options we cannot read from config.gz (it has
+# no cfg80211 section). A first build with defaults showed a CRC mismatch for wiphy_new_nm
+# (it takes struct cfg80211_ops, which grows when NL80211_TESTMODE is on; MediaTek's wlan
+# driver uses testmode). Extra scripts/config arguments for cfg80211 can be set here:
+#   CFG80211_OPTS=""                                        -> no extra options
+#   CFG80211_OPTS="--enable NL80211_TESTMODE --enable CFG80211_WEXT"   -> several
+if [ -z "${CFG80211_OPTS+x}" ]; then CFG80211_OPTS="--enable NL80211_TESTMODE"; fi
+if [ -n "$CFG80211_OPTS" ]; then
+  echo "cfg80211 extra options: $CFG80211_OPTS"
+  # shellcheck disable=SC2086
+  "$ACK/scripts/config" --file "$OUT/.config" $CFG80211_OPTS
+  mk olddefconfig
+fi
+
 for opt in MODULES MODVERSIONS USB; do
   grep -Eq "^CONFIG_${opt}=(y|m)" "$OUT/.config" || die "CONFIG_${opt} is not enabled in this config"
 done
@@ -159,7 +173,7 @@ if ! grep -Eq '^CONFIG_CFG80211=(y|m)' "$OUT/.config"; then
   "$ACK/scripts/config" --file "$OUT/.config" --enable WIRELESS --module CFG80211
   mk olddefconfig
 fi
-grep -E '^CONFIG_(LTO_CLANG_THIN|LTO_CLANG_FULL|CFI_CLANG|MODVERSIONS|MODULE_SIG|CFG80211|MAC80211)=' "$OUT/.config" || true
+grep -E '^(# )?CONFIG_(LTO_CLANG_THIN|LTO_CLANG_FULL|CFI_CLANG|MODVERSIONS|MODULE_SIG|CFG80211|MAC80211|NL80211_TESTMODE|CFG80211_WEXT)[ =]' "$OUT/.config" || true
 
 # ---------------------------------------------------------------- 5. build kernel (for Module.symvers)
 say "Building kernel + in-tree modules (needed for exact symbol CRCs). This is the slow part."
@@ -227,7 +241,7 @@ else
 fi
 
 modprobe --dump-modversions "$KO" | sort -k2 > "$WORKDIR/mine.crc" || true
-grep -q ' module_layout$' "$WORKDIR/mine.crc" || warn "no module_layout CRC in module (modversions off?)"
+grep -qE '[[:space:]]module_layout$' "$WORKDIR/mine.crc" || warn "no module_layout CRC in module (modversions off?)"
 
 if [ -n "${QUICK:-}" ]; then
   warn "QUICK mode: CRC cross-checks skipped. insmod may print 'no symbol version' warnings."

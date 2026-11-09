@@ -22,6 +22,10 @@ on:
         description: "QUICK mode: skip the kernel build (minutes, but NO symbol CRC safety check)"
         type: boolean
         default: false
+      cfg80211_opts:
+        description: "Extra scripts/config args for cfg80211 (empty = none). Default fixes wiphy_new_nm CRC."
+        type: string
+        default: "--enable NL80211_TESTMODE"
 
 jobs:
   build:
@@ -83,6 +87,7 @@ jobs:
         env:
           FORCE_THIN_LTO_INPUT: ${{ inputs.force_thin_lto }}
           QUICK_INPUT: ${{ inputs.quick }}
+          CFG80211_OPTS_INPUT: ${{ inputs.cfg80211_opts }}
         run: |
           export PATH="$PATH:/usr/sbin:/sbin"
           export SKIP_DNF=1                       # Fedora-only package step in the script
@@ -92,6 +97,7 @@ jobs:
           export JOBS="$(nproc)"
           [ "$FORCE_THIN_LTO_INPUT" = "true" ] && export FORCE_THIN_LTO=1
           [ "$QUICK_INPUT" = "true" ] && export QUICK=1
+          export CFG80211_OPTS="$CFG80211_OPTS_INPUT"   # empty string is honoured (= no extra options)
           chmod +x build_8821cu_gki.sh
           ./build_8821cu_gki.sh 2>&1 | tee build.log
 
