@@ -155,12 +155,8 @@ fi
 #   CFG80211_OPTS=""                                        -> no extra options
 #   CFG80211_OPTS="--enable NL80211_TESTMODE --enable CFG80211_WEXT"   -> several
 if [ -z "${CFG80211_OPTS+x}" ]; then CFG80211_OPTS="--enable NL80211_TESTMODE"; fi
-if [ -n "$CFG80211_OPTS" ]; then
-  echo "cfg80211 extra options: $CFG80211_OPTS"
-  # shellcheck disable=SC2086
-  "$ACK/scripts/config" --file "$OUT/.config" $CFG80211_OPTS
-  mk olddefconfig
-fi
+# (applied further below, AFTER CFG80211 itself is enabled: these options depend on it,
+#  so setting them first would be silently dropped by olddefconfig)
 
 for opt in MODULES MODVERSIONS USB; do
   grep -Eq "^CONFIG_${opt}=(y|m)" "$OUT/.config" || die "CONFIG_${opt} is not enabled in this config"
@@ -172,6 +168,21 @@ if ! grep -Eq '^CONFIG_CFG80211=(y|m)' "$OUT/.config"; then
   warn "CONFIG_CFG80211 not set in this config; enabling it as a module for the build"
   "$ACK/scripts/config" --file "$OUT/.config" --enable WIRELESS --module CFG80211
   mk olddefconfig
+fi
+if [ -n "$CFG80211_OPTS" ]; then
+  echo "cfg80211 extra options: $CFG80211_OPTS"
+  # shellcheck disable=SC2086
+  "$ACK/scripts/config" --file "$OUT/.config" $CFG80211_OPTS
+  mk olddefconfig
+  # Fail loudly if an --enable option did not stick (e.g. a missing dependency)
+  set -- $CFG80211_OPTS
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --enable|-e) sym="$2"; shift 2
+        grep -Eq "^CONFIG_${sym}=(y|m)" "$OUT/.config" || die "CONFIG_${sym} did not stick after olddefconfig (check its dependencies)";;
+      *) shift;;
+    esac
+  done
 fi
 grep -E '^(# )?CONFIG_(LTO_CLANG_THIN|LTO_CLANG_FULL|CFI_CLANG|MODVERSIONS|MODULE_SIG|CFG80211|MAC80211|NL80211_TESTMODE|CFG80211_WEXT)[ =]' "$OUT/.config" || true
 
